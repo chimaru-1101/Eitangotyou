@@ -3,27 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>英単語帳サイト</title>
+  <title>英単語AIチェック（完成版）</title>
   <style>
     body { margin: 0; font-family: sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; }
     .card { background: white; width: 95%; max-width: 500px; padding: 25px; border-radius: 15px; box-shadow: 0 5px 20px rgba(0,0,0,0.1); text-align: center; position: relative; }
-    .word { font-size: 30px; font-weight: bold; margin: 20px 0; color: #0b6efd; }
+    .word { font-size: 34px; font-weight: bold; margin: 20px 0; color: #0b6efd; }
     input, button { width: 100%; padding: 12px; font-size: 16px; border-radius: 10px; margin-top: 8px; box-sizing: border-box; }
     button { border: none; cursor: pointer; font-weight: bold; transition: 0.2s; }
     button:active { transform: scale(0.95); }
     .primary { background: #0b6efd; color: white; }
     .ghost { background: #eee; color: #333; }
+    .warn { background: #f7d364; color: black; } /* わからないボタン */
     .shuffle { background: #ff9800; color: white; }
-    .result { margin-top: 15px; padding: 15px; border-radius: 8px; font-size: 16px; font-weight: bold; min-height: 20px; }
+    .result { margin-top: 15px; padding: 15px; border-radius: 8px; font-size: 16px; font-weight: bold; min-height: 24px; }
     .ok { background: #e8f5e9; color: green; border: 2px solid green; }
     .ng { background: #ffebee; color: red; border: 2px solid red; }
-
-    #loginScreen {
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: #0b6efd; color: white;
-      display: flex; justify-content: center; align-items: center;
-      z-index: 9999; text-align: center;
-    }
+    #loginScreen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0b6efd; color: white; display: flex; justify-content: center; align-items: center; z-index: 9999; text-align: center; }
     .login-content { width: 85%; max-width: 350px; }
     .logout-btn { position: absolute; top: 10px; right: 10px; width: auto; font-size: 10px; padding: 5px 10px; background: none; color: #ccc; }
   </style>
@@ -51,6 +46,7 @@
   <input type="text" id="answer" placeholder="日本語訳を入力してEnter" onkeydown="if(event.key==='Enter') checkAnswer()">
 
   <button class="primary" id="checkBtn" onclick="checkAnswer()">AI判定</button>
+  <button class="warn" onclick="giveUp()">わからない（答えを見る）</button>
   <button class="ghost" onclick="nextWord()">次へ</button>
   <button class="shuffle" onclick="shuffleWords()">🎲 シャッフルして開始</button>
 
@@ -62,6 +58,7 @@
 let words = [];
 let index = 0;
 
+// 1. ログイン管理
 window.onload = function() {
   if (localStorage.getItem("user_api_key")) {
     document.getElementById("loginScreen").style.display = "none";
@@ -74,7 +71,7 @@ function login() {
     localStorage.setItem("user_api_key", key);
     document.getElementById("loginScreen").style.display = "none";
   } else {
-    alert("合言葉が正しくないみたいです。");
+    alert("合言葉（APIキー）を正しく入力してください。");
   }
 }
 
@@ -85,7 +82,7 @@ function logout() {
   }
 }
 
-// ボタンを押したときだけ実行される関数
+// 2. 音声再生（手動のみ）
 function speak() {
   const wordText = document.getElementById("word").textContent;
   if (!wordText || wordText.includes("読み込んで")) return;
@@ -96,16 +93,22 @@ function speak() {
   window.speechSynthesis.speak(uttr);
 }
 
+// 3. CSV読み込み（1行目スキップ機能付き）
 document.getElementById("csvFile").addEventListener("change", function(e){
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
   reader.onload = (event) => {
-    const lines = event.target.result.split(/\r?\n/);
+    let lines = event.target.result.split(/\r?\n/);
+    
+    // ★ここ：1行目を無効化（削除）
+    if (lines.length > 0) lines.shift();
+
     words = lines.map(line => {
       const cols = line.split(",");
       return (cols.length >= 2) ? {en: cols[0].replace(/"/g,"").trim(), ja: cols[1].replace(/"/g,"").trim()} : null;
     }).filter(w => w && w.en && w.ja);
+
     if(words.length > 0) { index = 0; showWord(); }
   };
   reader.readAsText(file, "UTF-8");
@@ -116,7 +119,6 @@ function showWord(){
   document.getElementById("answer").value = "";
   document.getElementById("result").textContent = "";
   document.getElementById("result").className = "result";
-  // ここにあった speak() を削除しました
 }
 
 function nextWord(){
@@ -135,10 +137,27 @@ function shuffleWords(){
   showWord();
 }
 
+// 4. 「わからない」時の処理
+function giveUp() {
+  if(words.length === 0) return;
+  const resultDiv = document.getElementById("result");
+  const word = words[index];
+  resultDiv.innerHTML = `❌ 確認しましょう<br><small>模範解答: ${word.ja}</small>`;
+  resultDiv.className = "result ng";
+}
+
+// 5. AI判定（空欄対応・正解時も模範解答を表示）
 async function checkAnswer(){
   const apiKey = localStorage.getItem("user_api_key");
   const userInput = document.getElementById("answer").value.trim();
-  if(!userInput || words.length === 0) return;
+  
+  if(words.length === 0) return;
+
+  // 空欄ならAIに聞かずに「わからない」と同じ処理
+  if(!userInput) {
+    giveUp();
+    return;
+  }
 
   const resultDiv = document.getElementById("result");
   const checkBtn = document.getElementById("checkBtn");
@@ -165,7 +184,7 @@ async function checkAnswer(){
     const text = data.choices[0].message.content.trim().toUpperCase();
 
     if(text.includes("OK")){
-      resultDiv.innerHTML = "⭕ 正解！";
+      resultDiv.innerHTML = `⭕ 正解！<br><small style="color:#666;">模範解答: ${word.ja}</small>`;
       resultDiv.className = "result ok";
     } else {
       resultDiv.innerHTML = `❌ 不正解<br><small>正解例: ${word.ja}</small>`;
