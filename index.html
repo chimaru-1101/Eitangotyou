@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>英単語帳 AI Edition (節約版)</title>
+  <title>英単語帳 AI Edition (最強判定版)</title>
   <style>
     body { margin: 0; font-family: sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; }
     .card { background: white; width: 95%; max-width: 500px; padding: 25px; border-radius: 15px; box-shadow: 0 5px 20px rgba(0,0,0,0.1); text-align: center; position: relative; }
@@ -29,18 +29,18 @@
 <div id="loginScreen">
   <div class="login-content">
     <h2>Welcome!</h2>
-    <p>OpenRouterのAPIキーを入力してね</p>
+    <p>OpenRouter APIキーを入力</p>
     <input type="password" id="keyInput" placeholder="sk-or-v1-..." style="color: black; text-align: center;">
     <button class="ghost" onclick="login()" style="margin-top: 20px;">スタート！</button>
   </div>
 </div>
 
 <div class="card">
-  <button class="logout-btn" onclick="logout()">キーリセット</button>
+  <button class="logout-btn" onclick="logout()">リセット</button>
   <h3>単語帳CSVを選択</h3>
   <input type="file" id="csvFile" accept=".csv">
   <div class="word" id="word">ファイルを読み込んでください</div>
-  <button class="ghost" onclick="speak()" style="width: auto; padding: 5px 20px; margin-bottom: 10px;">🔊 発音を聞く</button>
+  <button class="ghost" onclick="speak()" style="width: auto; padding: 5px 20px; margin-bottom: 10px;">🔊 発音</button>
   <input type="text" id="answer" placeholder="答えを入力（空Enterで回答表示）" onkeydown="handleKeyDown(event)">
   <button class="primary" id="checkBtn" onclick="checkAnswer()">判定</button>
   <button class="warn" onclick="giveUp()">答えを見る</button>
@@ -65,8 +65,6 @@ function login() {
   if (key.includes("sk-")) {
     localStorage.setItem("user_api_key", key);
     document.getElementById("loginScreen").style.display = "none";
-  } else {
-    alert("APIキーを正しく入力してください。");
   }
 }
 
@@ -142,7 +140,7 @@ function showResult(isOk, source) {
   const resultDiv = document.getElementById("result");
   const word = words[index];
   if(isOk) {
-    resultDiv.innerHTML = `⭕ 正解！ ${source === 'local' ? '(即時判定)' : ''}<br><small>模範解答: ${word.ja}</small>`;
+    resultDiv.innerHTML = `⭕ 正解！ ${source === 'local' ? '(即時)' : ''}<br><small>模範解答: ${word.ja}</small>`;
     resultDiv.className = "result ok";
   } else {
     resultDiv.innerHTML = `❌ 不正解<br><small>正解例: ${word.ja}</small>`;
@@ -158,30 +156,57 @@ function giveUp() {
   isAnswerShown = true;
 }
 
+// 編集距離
+function levenshtein(s1, s2) {
+  const costs = [];
+  for (let i = 0; i <= s1.length; i++) {
+    let lastValue = i;
+    for (let j = 0; j <= s2.length; j++) {
+      if (i === 0) costs[j] = j;
+      else if (j > 0) {
+        let newValue = costs[j - 1];
+        if (s1.charAt(i - 1) !== s2.charAt(j - 1))
+          newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+        costs[j - 1] = lastValue;
+        lastValue = newValue;
+      }
+    }
+    if (i > 0) costs[s2.length] = lastValue;
+  }
+  return costs[s2.length];
+}
+
 async function checkAnswer(){
-  const userInput = document.getElementById("answer").value.trim();
+  const userInputRaw = document.getElementById("answer").value.trim();
   const word = words[index];
-  if(!userInput) return;
+  if(!userInputRaw) return;
 
-  // 1. 完全一致なら即終了（API節約）
-  if (userInput === word.ja) {
+  // --- 強力な正規化 (全角/半角、ひらがな/カタカナの区別を抹消) ---
+  const normalize = (str) => {
+    return str.normalize('NFKC') // 全角英数→半角、半角カナ→全角へ統一
+              .replace(/[ぁ-ん]/g, s => String.fromCharCode(s.charCodeAt(0) + 0x60)) // ひらがな→カタカナ
+              .replace(/[、。，．〜～\- \(\)（）]/g, "") // 記号削除
+              .toLowerCase();
+  };
+
+  const userInput = normalize(userInputRaw);
+  const correctAnswers = word.ja.split(/[、,／/ ]+/).map(a => normalize(a));
+
+  // ローカル判定
+  const isDirectMatch = correctAnswers.some(ans => ans === userInput || userInput === ans);
+  const isPartialMatch = userInput.length >= 2 && correctAnswers.some(ans => ans.includes(userInput) || userInput.includes(ans));
+  const isTypoMatch = correctAnswers.some(ans => ans.length > 1 && levenshtein(userInput, ans) <= 1);
+
+  if (isDirectMatch || isPartialMatch || isTypoMatch) {
     showResult(true, 'local');
     return;
   }
 
-  // 2. 2文字以上の名詞（単語）が含まれていれば即終了（API節約）
-  // 「あ」などの1文字だけ含まれていても正解にならないようにする
-  if (userInput.length >= 2 && word.ja.includes(userInput)) {
-    showResult(true, 'local');
-    return;
-  }
-
-  // 3. 上記に当てはまらない場合のみAI判定へ
+  // AI判定
   const apiKey = localStorage.getItem("user_api_key");
   const resultDiv = document.getElementById("result");
   const checkBtn = document.getElementById("checkBtn");
-  
-  resultDiv.textContent = "AIが詳しく判定中...";
+  resultDiv.textContent = "AIが判定中...";
   checkBtn.disabled = true;
 
   try {
@@ -192,15 +217,18 @@ async function checkAnswer(){
         "model": "google/gemma-3n-e4b-it:free", 
         "messages": [{ 
           "role": "user", 
-          "content": `単語「${word.en}」の訳として「${userInput}」は正解？正解例「${word.ja}」。意味が近ければOK、遠ければNG。解説不要。OKかNGのみ。` 
+          "content": `単語「${word.en}」の訳として「${userInputRaw}」は正解？正解例「${word.ja}」。意味が本質的に同じならOK、違うならNG。回答はOKかNGのみ。` 
         }]
       })
     });
     const data = await response.json();
-    const aiResponse = data.choices[0].message.content.trim().toUpperCase();
-    showResult(aiResponse.includes("OK"), 'ai');
+    if (data.choices && data.choices[0]) {
+      const aiResponse = data.choices[0].message.content.trim().toUpperCase();
+      showResult(aiResponse.includes("OK"), 'ai');
+    }
   } catch(e) {
-    resultDiv.innerHTML = `エラー発生: ${e.message}`;
+    resultDiv.innerHTML = `判定エラー（答えを確認してください）`;
+    isAnswerShown = true;
   } finally {
     checkBtn.disabled = false;
   }
