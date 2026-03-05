@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>英単語帳サイト</title>
+  <title>英単語帳</title>
   <style>
     body { margin: 0; font-family: sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; }
     .card { background: white; width: 95%; max-width: 500px; padding: 25px; border-radius: 15px; box-shadow: 0 5px 20px rgba(0,0,0,0.1); text-align: center; position: relative; }
@@ -13,7 +13,7 @@
     button:active { transform: scale(0.95); }
     .primary { background: #0b6efd; color: white; }
     .ghost { background: #eee; color: #333; }
-    .warn { background: #f7d364; color: black; } /* わからないボタン */
+    .warn { background: #ffc107; color: black; }
     .shuffle { background: #ff9800; color: white; }
     .result { margin-top: 15px; padding: 15px; border-radius: 8px; font-size: 16px; font-weight: bold; min-height: 24px; }
     .ok { background: #e8f5e9; color: green; border: 2px solid green; }
@@ -51,14 +51,13 @@
   <button class="shuffle" onclick="shuffleWords()">🎲 シャッフルして開始</button>
 
   <div id="result" class="result"></div>
-  <div id="debugInfo"></div>
 </div>
 
 <script>
 let words = [];
 let index = 0;
+let isAnswerShown = false; // 答えを見たかどうかのフラグ
 
-// 1. ログイン管理
 window.onload = function() {
   if (localStorage.getItem("user_api_key")) {
     document.getElementById("loginScreen").style.display = "none";
@@ -71,7 +70,7 @@ function login() {
     localStorage.setItem("user_api_key", key);
     document.getElementById("loginScreen").style.display = "none";
   } else {
-    alert("合言葉（APIキー）を正しく入力してください。");
+    alert("合言葉を正しく入力してください。");
   }
 }
 
@@ -82,27 +81,22 @@ function logout() {
   }
 }
 
-// 2. 音声再生（手動のみ）
 function speak() {
   const wordText = document.getElementById("word").textContent;
   if (!wordText || wordText.includes("読み込んで")) return;
   window.speechSynthesis.cancel();
   const uttr = new SpeechSynthesisUtterance(wordText);
   uttr.lang = 'en-US';
-  uttr.rate = 0.9;
   window.speechSynthesis.speak(uttr);
 }
 
-// 3. CSV読み込み（1行目スキップ機能付き）
 document.getElementById("csvFile").addEventListener("change", function(e){
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
   reader.onload = (event) => {
     let lines = event.target.result.split(/\r?\n/);
-    
-    // ★ここ：1行目を無効化（削除）
-    if (lines.length > 0) lines.shift();
+    if (lines.length > 0) lines.shift(); // 1行目をスキップ
 
     words = lines.map(line => {
       const cols = line.split(",");
@@ -119,10 +113,18 @@ function showWord(){
   document.getElementById("answer").value = "";
   document.getElementById("result").textContent = "";
   document.getElementById("result").className = "result";
+  isAnswerShown = false; // フラグをリセット
 }
 
 function nextWord(){
   if(words.length === 0) return;
+
+  // 答えを見ていない場合に確認を出す
+  if (!isAnswerShown) {
+    const skip = confirm("まだ判定してないよ！次の単語に行ってもいい？");
+    if (!skip) return;
+  }
+
   index = (index + 1) % words.length;
   showWord();
 }
@@ -137,27 +139,21 @@ function shuffleWords(){
   showWord();
 }
 
-// 4. 「わからない」時の処理
 function giveUp() {
   if(words.length === 0) return;
   const resultDiv = document.getElementById("result");
   const word = words[index];
   resultDiv.innerHTML = `❌ 確認しましょう<br><small>模範解答: ${word.ja}</small>`;
   resultDiv.className = "result ng";
+  isAnswerShown = true; // 答えを表示した
 }
 
-// 5. AI判定（空欄対応・正解時も模範解答を表示）
 async function checkAnswer(){
   const apiKey = localStorage.getItem("user_api_key");
   const userInput = document.getElementById("answer").value.trim();
   
   if(words.length === 0) return;
-
-  // 空欄ならAIに聞かずに「わからない」と同じ処理
-  if(!userInput) {
-    giveUp();
-    return;
-  }
+  if(!userInput) { giveUp(); return; }
 
   const resultDiv = document.getElementById("result");
   const checkBtn = document.getElementById("checkBtn");
@@ -190,6 +186,7 @@ async function checkAnswer(){
       resultDiv.innerHTML = `❌ 不正解<br><small>正解例: ${word.ja}</small>`;
       resultDiv.className = "result ng";
     }
+    isAnswerShown = true; // 判定が終わった
   } catch(e) {
     resultDiv.innerHTML = `❌ エラー`;
   } finally {
@@ -198,5 +195,4 @@ async function checkAnswer(){
 }
 </script>
 </body>
-
 </html>
